@@ -26,7 +26,7 @@ const std::unordered_map<int, std::string> AirsimROSWrapper::image_type_int_to_s
 };
 
 AirsimROSWrapper::AirsimROSWrapper(const ros::NodeHandle& nh, const ros::NodeHandle& nh_private, const std::string& host_ip)
-    : img_async_spinner_(1, &img_timer_cb_queue_) // a thread for image callbacks to be 'spun' by img_async_spinner_
+    : img_async_spinner_(5, &img_timer_cb_queue_) // a thread for image callbacks to be 'spun' by img_async_spinner_
     , lidar_async_spinner_(1, &lidar_timer_cb_queue_) // same as above, but for lidar
     , is_used_lidar_timer_cb_queue_(false)
     , is_used_img_timer_cb_queue_(false)
@@ -146,7 +146,7 @@ void AirsimROSWrapper::create_ros_pubs_from_settings_json()
         vehicle_ros->odom_frame_id = curr_vehicle_name + "/" + odom_frame_id_;
         vehicle_ros->vehicle_name = curr_vehicle_name;
 
-        append_static_vehicle_tf(vehicle_ros.get(), *vehicle_setting);
+        // append_static_vehicle_tf(vehicle_ros.get(), *vehicle_setting);
 
         vehicle_ros->odom_local_pub = nh_private_.advertise<nav_msgs::Odometry>(curr_vehicle_name + "/" + odom_frame_id_, 10);
 
@@ -196,7 +196,7 @@ void AirsimROSWrapper::create_ros_pubs_from_settings_json()
             auto& curr_camera_name = curr_camera_elem.first;
 
             set_nans_to_zeros_in_pose(*vehicle_setting, camera_setting);
-            append_static_camera_tf(vehicle_ros.get(), curr_camera_name, camera_setting);
+            // append_static_camera_tf(vehicle_ros.get(), curr_camera_name, camera_setting);
             // camera_setting.gimbal
             std::vector<ImageRequest> current_image_request_vec;
 
@@ -223,13 +223,13 @@ void AirsimROSWrapper::create_ros_pubs_from_settings_json()
                     const std::string cam_image_topic = curr_vehicle_name + "/" + curr_camera_name + "/" +
                                                         image_type_int_to_string_map_.at(capture_setting.image_type);
 
-                    image_pub_vec_.push_back(image_transporter.advertise(cam_image_topic, 1));
-                    cam_info_pub_vec_.push_back(nh_private_.advertise<sensor_msgs::CameraInfo>(cam_image_topic + "/camera_info", 10));
-                    camera_info_msg_vec_.push_back(generate_cam_info(curr_camera_name, camera_setting, capture_setting));
+                    // image_pub_vec_.push_back(image_transporter.advertise(cam_image_topic, 1));
+                    // cam_info_pub_vec_.push_back(nh_private_.advertise<sensor_msgs::CameraInfo>(cam_image_topic + "/camera_info", 10));
+                    // camera_info_msg_vec_.push_back(generate_cam_info(curr_camera_name, camera_setting, capture_setting));
                 }
             }
             // push back pair (vector of image captures, current vehicle name)
-            airsim_img_request_vehicle_name_pair_vec_.push_back({ current_image_request_vec, curr_vehicle_name });
+            // airsim_img_request_vehicle_name_pair_vec_.push_back({ current_image_request_vec, curr_vehicle_name });
         }
 
         // iterate over sensors
@@ -868,14 +868,14 @@ sensor_msgs::Imu AirsimROSWrapper::get_imu_msg_from_airsim(const msr::airlib::Im
     imu_msg.orientation.w = imu_data.orientation.w();
 
     // todo radians per second
-    imu_msg.angular_velocity.x = imu_data.angular_velocity.x();
-    imu_msg.angular_velocity.y = imu_data.angular_velocity.y();
-    imu_msg.angular_velocity.z = imu_data.angular_velocity.z();
+    imu_msg.angular_velocity.x = (imu_data.angular_velocity.x());
+    imu_msg.angular_velocity.y = -(imu_data.angular_velocity.y());
+    imu_msg.angular_velocity.z = -(imu_data.angular_velocity.z());
 
     // meters/s2^m
-    imu_msg.linear_acceleration.x = imu_data.linear_acceleration.x();
+    imu_msg.linear_acceleration.x = -imu_data.linear_acceleration.x();
     imu_msg.linear_acceleration.y = imu_data.linear_acceleration.y();
-    imu_msg.linear_acceleration.z = imu_data.linear_acceleration.z();
+    imu_msg.linear_acceleration.z = -imu_data.linear_acceleration.z();
 
     // imu_msg.orientation_covariance = ;
     // imu_msg.angular_velocity_covariance = ;
@@ -1071,8 +1071,8 @@ void AirsimROSWrapper::publish_vehicle_state()
         }
 
         // odom and transforms
-        vehicle_ros->odom_local_pub.publish(vehicle_ros->curr_odom);
-        publish_odom_tf(vehicle_ros->curr_odom);
+        // vehicle_ros->odom_local_pub.publish(vehicle_ros->curr_odom);
+        // publish_odom_tf(vehicle_ros->curr_odom);
 
         // ground truth GPS position from sim/HITL
         vehicle_ros->global_gps_pub.publish(vehicle_ros->gps_sensor_msg);
@@ -1121,7 +1121,7 @@ void AirsimROSWrapper::publish_vehicle_state()
             }
         }
 
-        update_and_publish_static_transforms(vehicle_ros.get());
+        // update_and_publish_static_transforms(vehicle_ros.get());
     }
 }
 
@@ -1299,17 +1299,28 @@ void AirsimROSWrapper::append_static_camera_tf(VehicleROS* vehicle_ros, const st
 }
 
 void AirsimROSWrapper::img_response_timer_cb(const ros::TimerEvent& event)
-{
+{   
     try {
+        ros::Time start_time = ros::Time::now();
+
         int image_response_idx = 0;
         for (const auto& airsim_img_request_vehicle_name_pair : airsim_img_request_vehicle_name_pair_vec_) {
             const std::vector<ImageResponse>& img_response = airsim_client_images_.simGetImages(airsim_img_request_vehicle_name_pair.first, airsim_img_request_vehicle_name_pair.second);
 
             if (img_response.size() == airsim_img_request_vehicle_name_pair.first.size()) {
-                process_and_publish_img_response(img_response, image_response_idx, airsim_img_request_vehicle_name_pair.second);
+                // process_and_publish_img_response(img_response, image_response_idx, airsim_img_request_vehicle_name_pair.second);
                 image_response_idx += img_response.size();
             }
         }
+
+        // End time
+    ros::Time end_time = ros::Time::now();
+
+    // Calculate elapsed time
+    ros::Duration elapsed_time = end_time - start_time;
+
+    // Print elapsed time
+    ROS_INFO("Elapsed time: %.3f seconds", elapsed_time.toSec());
     }
 
     catch (rpc::rpc_error& e) {

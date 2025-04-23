@@ -23,6 +23,7 @@ message(STATUS "found RPC_LIB_INCLUDES=${RPC_LIB_INCLUDES}")
 # find_package(Eigen3 REQUIRED) 
 find_package(Boost REQUIRED)
 find_package(OpenCV REQUIRED)
+FIND_PACKAGE(yaml-cpp REQUIRED)
 
 find_package(catkin REQUIRED COMPONENTS
   cv_bridge
