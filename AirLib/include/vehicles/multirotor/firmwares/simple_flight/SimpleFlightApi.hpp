@@ -16,6 +16,7 @@
 #include "AirSimSimpleFlightEstimator.hpp"
 #include "AirSimSimpleFlightCommon.hpp"
 #include "physics/PhysicsBody.hpp"
+#include "physics/FastPhysicsEngine.hpp"
 #include "common/AirSimSettings.hpp"
 
 //TODO: we need to protect contention between physics thread and API server thread
@@ -53,6 +54,32 @@ namespace airlib
 
             firmware_->reset();
         }
+
+        //====================================================================
+        // VIO Support: Uses FastPhysicsEngine static interface
+        //====================================================================
+        virtual void setVIOKinematics(const Kinematics::State& vio_state) override
+        {
+            // Get physics body via parent and pass to FastPhysicsEngine
+            auto* parent = getParent();
+            if (parent) {
+                auto* body = parent->getPhysicsBody();
+                if (body) {
+                    FastPhysicsEngine::setVIOPending(static_cast<PhysicsBody*>(body), vio_state);
+                }
+            }
+        }
+
+        virtual void setUseVIO(bool use_vio) override
+        {
+            FastPhysicsEngine::setVIOEnabled(use_vio);
+        }
+
+        virtual bool isUsingVIO() const override
+        {
+            return FastPhysicsEngine::isVIOEnabled();
+        }
+
         virtual void update() override
         {
             MultirotorApiBase::update();

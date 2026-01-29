@@ -509,6 +509,29 @@ namespace airlib
             return getWorldSimApi()->getSettingsString();
         });
 
+        //====================================================================
+        // VIO Support: RPC API bindings
+        //====================================================================
+
+        pimpl_->server.bind("testVIOConnection", [&]() -> std::string {
+            return "VIO_CONNECTION_OK";
+        });
+
+        pimpl_->server.bind("setVIOKinematics", [&](const RpcLibAdaptorsBase::KinematicsState& vio_state, const std::string& vehicle_name) -> void {
+            auto* vehicle_api = getVehicleApi(vehicle_name);
+            vehicle_api->setVIOKinematics(vio_state.to());
+        });
+
+        pimpl_->server.bind("setUseVIOForControl", [&](bool use_vio, const std::string& vehicle_name) -> void {
+            auto* vehicle_api = getVehicleApi(vehicle_name);
+            vehicle_api->setUseVIO(use_vio);
+        });
+
+        pimpl_->server.bind("isUsingVIOForControl", [&](const std::string& vehicle_name) -> bool {
+            auto* vehicle_api = getVehicleApi(vehicle_name);
+            return vehicle_api->isUsingVIO();
+        });
+
         //if we don't suppress then server will bomb out for exceptions raised by any method
         pimpl_->server.suppress_exceptions(true);
     }

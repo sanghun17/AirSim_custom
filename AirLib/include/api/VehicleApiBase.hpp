@@ -18,6 +18,7 @@
 #include "sensors/magnetometer/MagnetometerBase.hpp"
 #include "sensors/distance/DistanceBase.hpp"
 #include "sensors/gps/GpsBase.hpp"
+#include "physics/Kinematics.hpp"
 #include <exception>
 #include <string>
 
@@ -171,6 +172,26 @@ Some methods may not be applicable to specific vehicle in which case an exceptio
                 throw VehicleControllerException(Utils::stringf("No distance sensor with name %s exist on vehicle", distance_sensor_name.c_str()));
 
             return distance_sensor->getOutput();
+        }
+
+        //====================================================================
+        // VIO Support: Virtual methods for VIO state injection
+        //====================================================================
+        virtual void setVIOKinematics(const Kinematics::State& vio_state)
+        {
+            unused(vio_state);
+            // Default: no-op. Override in derived class to handle VIO data.
+        }
+
+        virtual void setUseVIO(bool use_vio)
+        {
+            unused(use_vio);
+            // Default: no-op. Override in derived class.
+        }
+
+        virtual bool isUsingVIO() const
+        {
+            return false; // Default: VIO disabled
         }
 
         virtual ~VehicleApiBase() = default;

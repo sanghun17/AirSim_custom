@@ -1601,12 +1601,7 @@ void AirsimROSWrapper::read_params_from_yaml_and_fill_cam_info_msg(const std::st
 
 void AirsimROSWrapper::vio_odom_callback(const nav_msgs::Odometry::ConstPtr& msg)
 {
-    // static auto last_callback_time = std::chrono::steady_clock::now();
-    // auto now = std::chrono::steady_clock::now();
-    // auto dt = std::chrono::duration<double>(now - last_callback_time).count();
-
-    // // std::cout << "[VIO DEBUG ROS] vio_odom_callback called (dt=" << dt << "s, hz=" << (dt > 0 ? 1.0/dt : 0) << ")" << std::endl;
-    // last_callback_time = now;
+    // std::cout << "[VIO] Callback! use_vio=" << use_vio_for_control_ << std::endl;
 
     try {
         // // std::cout << "[VIO DEBUG ROS] Checking use_vio_for_control_: " << use_vio_for_control_ << std::endl;
@@ -1707,7 +1702,21 @@ void AirsimROSWrapper::vio_odom_callback(const nav_msgs::Odometry::ConstPtr& msg
             vio_state.twist.linear.z() = msg->twist.twist.linear.z;
         }
 
+        // Angular velocity
+        if (isENU_) {
+            // ENU to NED: swap x/y and negate z
+            vio_state.twist.angular.x() = msg->twist.twist.angular.y;
+            vio_state.twist.angular.y() = msg->twist.twist.angular.x;
+            vio_state.twist.angular.z() = -msg->twist.twist.angular.z;
+        } else {
+            vio_state.twist.angular.x() = msg->twist.twist.angular.x;
+            vio_state.twist.angular.y() = msg->twist.twist.angular.y;
+            vio_state.twist.angular.z() = msg->twist.twist.angular.z;
+        }
+
         // TEST MODE: Inject full GT to verify interface and update rate
+        // DISABLED - Use actual VIO data
+        /*
         if (!vehicle_name_ptr_map_.empty()) {
             try {
                 std::string first_vehicle = vehicle_name_ptr_map_.begin()->first;
@@ -1777,6 +1786,7 @@ void AirsimROSWrapper::vio_odom_callback(const nav_msgs::Odometry::ConstPtr& msg
                 vio_state.twist.angular.z() = msg->twist.twist.angular.z;
             }
         }
+        */
 
         // Acceleration not available in nav_msgs::Odometry, set to zero
         vio_state.accelerations.linear = msr::airlib::Vector3r::Zero();
@@ -1796,19 +1806,14 @@ void AirsimROSWrapper::vio_odom_callback(const nav_msgs::Odometry::ConstPtr& msg
 
         // Only inject VIO if mode is enabled
         if (!use_vio_for_control_) {
-            // std::cout << "[VIO DEBUG ROS] VIO mode disabled, skipping injection" << std::endl;
             return;
         }
 
-        // std::cout << "[VIO DEBUG ROS] Injecting to vehicles (count: " << vehicle_name_ptr_map_.size() << ")" << std::endl;
         // Inject VIO state to all vehicles via RPC
         for (const auto& vehicle_pair : vehicle_name_ptr_map_) {
             const std::string& vehicle_name = vehicle_pair.first;
-            // std::cout << "[VIO DEBUG ROS] Calling setVIOKinematics for vehicle: " << vehicle_name << std::endl;
             airsim_client_->setVIOKinematics(vio_state, vehicle_name);
-            // std::cout << "[VIO DEBUG ROS] setVIOKinematics completed for vehicle: " << vehicle_name << std::endl;
         }
-        // std::cout << "[VIO DEBUG ROS] All vehicles updated successfully" << std::endl;
 
     } catch (rpc::rpc_error& e) {
         // std::cout << "[VIO DEBUG ROS] RPC error caught in vio_odom_callback: " << e.what() << std::endl;
