@@ -53,6 +53,51 @@ namespace airlib
 
             firmware_->reset();
         }
+
+        //====================================================================
+        // VIO Support: Estimator Accessor
+        //====================================================================
+
+        /**
+         * Get pointer to the state estimator
+         * Used by RPC API to inject VIO odometry data
+         * @return Pointer to estimator, or nullptr if not available
+         */
+        AirSimSimpleFlightEstimator* getEstimator()
+        {
+            return estimator_.get();
+        }
+
+        const AirSimSimpleFlightEstimator* getEstimator() const
+        {
+            return estimator_.get();
+        }
+
+        //====================================================================
+        // VIO Support: Override VehicleApiBase virtual methods
+        //====================================================================
+        virtual void setVIOKinematics(const Kinematics::State& vio_state) override
+        {
+            if (estimator_) {
+                estimator_->setVIOKinematics(vio_state);
+            }
+        }
+
+        virtual void setUseVIO(bool use_vio) override
+        {
+            if (estimator_) {
+                estimator_->setUseVIO(use_vio);
+            }
+        }
+
+        virtual bool isUsingVIO() const override
+        {
+            if (estimator_) {
+                return estimator_->isUsingVIO();
+            }
+            return false;
+        }
+
         virtual void update() override
         {
             MultirotorApiBase::update();

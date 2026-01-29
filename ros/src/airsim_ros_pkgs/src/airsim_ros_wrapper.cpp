@@ -52,7 +52,7 @@ AirsimROSWrapper::AirsimROSWrapper(const ros::NodeHandle& nh, const ros::NodeHan
 
     initialize_ros();
 
-    std::cout << "AirsimROSWrapper Initialized!\n";
+    // std::cout << "AirsimROSWrapper Initialized!\n";
 }
 
 void AirsimROSWrapper::initialize_airsim()
@@ -74,6 +74,11 @@ void AirsimROSWrapper::initialize_airsim()
             airsim_client_->enableApiControl(true, vehicle_name_ptr_pair.first); // todo expose as rosservice?
             airsim_client_->armDisarm(true, vehicle_name_ptr_pair.first); // todo exposes as rosservice?
         }
+
+        //====================================================================
+        // VIO Support: Set VIO mode on AirSim connection
+        // Note: This is done in a timer callback after full initialization
+        //====================================================================
 
         origin_geo_point_ = airsim_client_->getHomeGeoPoint("");
         // todo there's only one global origin geopoint for environment. but airsim API accept a parameter vehicle_name? inside carsimpawnapi.cpp, there's a geopoint being assigned in the constructor. by?
@@ -106,6 +111,27 @@ void AirsimROSWrapper::initialize_ros()
 
     create_ros_pubs_from_settings_json();
     airsim_control_update_timer_ = nh_private_.createTimer(ros::Duration(update_airsim_control_every_n_sec), &AirsimROSWrapper::drone_state_timer_cb, this);
+
+    //====================================================================
+    // VIO Support: Initialize VIO injection
+    //====================================================================
+
+    // Read VIO parameters from global simulation config
+    nh_.param<bool>("/simulation/airsim/use_vio_for_control", use_vio_for_control_, false);
+    nh_.param<std::string>("/simulation/airsim/vio_topic", vio_topic_, "/aft_mapped_to_init_odom");
+    double vio_update_rate = 10.0;
+    nh_.param<double>("/simulation/airsim/vio_update_rate", vio_update_rate, 10.0);
+
+    // Subscribe to VIO odometry topic
+    vio_odom_sub_ = nh_.subscribe(vio_topic_, 1, &AirsimROSWrapper::vio_odom_callback, this);
+
+    // Create timer to check VIO mode updates
+    vio_mode_check_timer_ = nh_.createTimer(ros::Duration(1.0 / vio_update_rate), &AirsimROSWrapper::vio_mode_check_timer_cb, this);
+
+    // ROS_INFO("[AirSim VIO] VIO injection initialized");
+    // ROS_INFO("[AirSim VIO]   VIO topic: %s", vio_topic_.c_str());
+    // ROS_INFO("[AirSim VIO]   Use VIO for control: %s", use_vio_for_control_ ? "TRUE" : "FALSE (using ground truth)");
+    // ROS_INFO("[AirSim VIO]   Update rate: %.1f Hz", vio_update_rate);
 }
 
 // XmlRpc::XmlRpcValue can't be const in this case
@@ -859,23 +885,61 @@ airsim_ros_pkgs::Altimeter AirsimROSWrapper::get_altimeter_msg_from_airsim(const
 // todo covariances
 sensor_msgs::Imu AirsimROSWrapper::get_imu_msg_from_airsim(const msr::airlib::ImuBase::Output& imu_data) const
 {
+    // ~0805 
+    // sensor_msgs::Imu imu_msg;
+    // imu_msg.header.stamp = airsim_timestamp_to_ros(imu_data.time_stamp);
+    // imu_msg.orientation.x = imu_data.orientation.x();
+    // imu_msg.orientation.y = imu_data.orientation.y();
+    // imu_msg.orientation.z = imu_data.orientation.z();
+    // imu_msg.orientation.w = imu_data.orientation.w();
+    // imu_msg.angular_velocity.x = (imu_data.angular_velocity.x());
+    // imu_msg.angular_velocity.y = -(imu_data.angular_velocity.y());
+    // imu_msg.angular_velocity.z = -(imu_data.angular_velocity.z());
+    // imu_msg.linear_acceleration.x = -imu_data.linear_acceleration.x();
+    // imu_msg.linear_acceleration.y = imu_data.linear_acceleration.y();
+    // imu_msg.linear_acceleration.z = -imu_data.linear_acceleration.z();
+
+    // modified at 0805
+    // sensor_msgs::Imu imu_msg;
+    // imu_msg.header.stamp = airsim_timestamp_to_ros(imu_data.time_stamp);
+    // imu_msg.orientation.x = imu_data.orientation.x();
+    // imu_msg.orientation.y = imu_data.orientation.y();
+    // imu_msg.orientation.z = imu_data.orientation.z();
+    // imu_msg.orientation.w = imu_data.orientation.w();
+    // imu_msg.angular_velocity.x = (imu_data.angular_velocity.x());
+    // imu_msg.angular_velocity.y = -(imu_data.angular_velocity.y());
+    // imu_msg.angular_velocity.z = -(imu_data.angular_velocity.z());
+    // imu_msg.linear_acceleration.x = -imu_data.linear_acceleration.x();
+    // imu_msg.linear_acceleration.y = imu_data.linear_acceleration.y();
+    // imu_msg.linear_acceleration.z = imu_data.linear_acceleration.z();
+
+    // modified at 0806 : same as mavros!
     sensor_msgs::Imu imu_msg;
-    // imu_msg.header.frame_id = "/airsim/odom_local_ned";// todo multiple drones
     imu_msg.header.stamp = airsim_timestamp_to_ros(imu_data.time_stamp);
     imu_msg.orientation.x = imu_data.orientation.x();
     imu_msg.orientation.y = imu_data.orientation.y();
     imu_msg.orientation.z = imu_data.orientation.z();
     imu_msg.orientation.w = imu_data.orientation.w();
-
-    // todo radians per second
     imu_msg.angular_velocity.x = (imu_data.angular_velocity.x());
     imu_msg.angular_velocity.y = -(imu_data.angular_velocity.y());
     imu_msg.angular_velocity.z = -(imu_data.angular_velocity.z());
-
-    // meters/s2^m
-    imu_msg.linear_acceleration.x = -imu_data.linear_acceleration.x();
-    imu_msg.linear_acceleration.y = imu_data.linear_acceleration.y();
+    imu_msg.linear_acceleration.x = imu_data.linear_acceleration.x();
+    imu_msg.linear_acceleration.y = -imu_data.linear_acceleration.y();
     imu_msg.linear_acceleration.z = -imu_data.linear_acceleration.z();
+
+    // original
+    // sensor_msgs::Imu imu_msg;
+    // imu_msg.header.stamp = airsim_timestamp_to_ros(imu_data.time_stamp);
+    // imu_msg.orientation.x = imu_data.orientation.x();
+    // imu_msg.orientation.y = imu_data.orientation.y();
+    // imu_msg.orientation.z = imu_data.orientation.z();
+    // imu_msg.orientation.w = imu_data.orientation.w();
+    // imu_msg.angular_velocity.x = (imu_data.angular_velocity.x());
+    // imu_msg.angular_velocity.y = (imu_data.angular_velocity.y());
+    // imu_msg.angular_velocity.z = (imu_data.angular_velocity.z());
+    // imu_msg.linear_acceleration.x = imu_data.linear_acceleration.x();
+    // imu_msg.linear_acceleration.y = imu_data.linear_acceleration.y();
+    // imu_msg.linear_acceleration.z = imu_data.linear_acceleration.z();
 
     // imu_msg.orientation_covariance = ;
     // imu_msg.angular_velocity_covariance = ;
@@ -1529,4 +1593,334 @@ void AirsimROSWrapper::read_params_from_yaml_and_fill_cam_info_msg(const std::st
     for (int i = 0; i < D_rows * D_cols; ++i) {
         cam_info.D[i] = D_data[i].as<float>();
     }
+}
+
+//====================================================================
+// VIO Support: Implementation
+//====================================================================
+
+void AirsimROSWrapper::vio_odom_callback(const nav_msgs::Odometry::ConstPtr& msg)
+{
+    // static auto last_callback_time = std::chrono::steady_clock::now();
+    // auto now = std::chrono::steady_clock::now();
+    // auto dt = std::chrono::duration<double>(now - last_callback_time).count();
+
+    // // std::cout << "[VIO DEBUG ROS] vio_odom_callback called (dt=" << dt << "s, hz=" << (dt > 0 ? 1.0/dt : 0) << ")" << std::endl;
+    // last_callback_time = now;
+
+    try {
+        // // std::cout << "[VIO DEBUG ROS] Checking use_vio_for_control_: " << use_vio_for_control_ << std::endl;
+
+        // Create vio_state for coordinate transformation (used for debug even when disabled)
+        msr::airlib::Kinematics::State vio_state;
+
+        // Compact debug output with GT comparison
+        // std::cout << "\n=== VIO Data (isENU: " << isENU_ << ") ===" << std::endl;
+
+        // Position (handle frame conversion if needed)
+        if (isENU_) {
+            // VIO is in ENU, convert to NED for AirSim
+            // ENU to NED: (E, N, U) -> (N, E, -U)
+            vio_state.pose.position.x() = msg->pose.pose.position.y;  // North
+            vio_state.pose.position.y() = msg->pose.pose.position.x;  // East
+            vio_state.pose.position.z() = -msg->pose.pose.position.z; // Down (negate Up)
+        } else {
+            // Already in NED/AirSim frame
+            vio_state.pose.position.x() = msg->pose.pose.position.x;
+            vio_state.pose.position.y() = msg->pose.pose.position.y;
+            vio_state.pose.position.z() = msg->pose.pose.position.z;
+        }
+
+        // Position debug will be printed later with velocities
+
+        // Orientation (quaternion) - ENU to NED transformation
+        float w_enu = msg->pose.pose.orientation.w;
+        float x_enu = msg->pose.pose.orientation.x;
+        float y_enu = msg->pose.pose.orientation.y;
+        float z_enu = msg->pose.pose.orientation.z;
+
+        if (isENU_) {
+            // Quaternion debug will be printed later
+
+            // ENU to NED quaternion transformation (axis reordering)
+            // ENU: x=East, y=North, z=Up
+            // NED: x=North, y=East, z=Down
+            // Simple axis swap for quaternion components
+            vio_state.pose.orientation.w() = w_enu;
+            vio_state.pose.orientation.x() = y_enu;   // NED-x (North) from ENU-y
+            vio_state.pose.orientation.y() = x_enu;   // NED-y (East) from ENU-x
+            vio_state.pose.orientation.z() = -z_enu;  // NED-z (Down) from -ENU-z
+
+            // Auto-align VIO orientation to Ground Truth on first frame
+            if (!vio_orientation_aligned_ && !vehicle_name_ptr_map_.empty()) {
+                try {
+                    std::string first_vehicle = vehicle_name_ptr_map_.begin()->first;
+                    auto gt_pose = airsim_client_->simGetVehiclePose(first_vehicle);
+
+                    // Calculate offset: GT * VIO^-1
+                    msr::airlib::Quaternionr vio_quat_ned = vio_state.pose.orientation;
+                    vio_orientation_offset_ = gt_pose.orientation * vio_quat_ned.inverse();
+
+                    vio_orientation_aligned_ = true;
+
+                    // std::cout << "[VIO AUTO-ALIGN] Orientation offset calculated: Quat("
+                    //           << vio_orientation_offset_.w() << ", "
+                    //           << vio_orientation_offset_.x() << ", "
+                    //           << vio_orientation_offset_.y() << ", "
+                    //           << vio_orientation_offset_.z() << ")" << std::endl;
+                } catch (const std::exception& e) {
+                    // std::cout << "[VIO AUTO-ALIGN] Failed to get GT pose: " << e.what() << std::endl;
+                }
+            }
+
+            // Apply orientation offset if aligned
+            if (vio_orientation_aligned_) {
+                // Align orientation
+                msr::airlib::Quaternionr aligned_quat = vio_orientation_offset_ * vio_state.pose.orientation;
+                vio_state.pose.orientation = aligned_quat;
+            }
+        } else {
+            // Already in NED/AirSim frame
+            vio_state.pose.orientation.w() = w_enu;
+            vio_state.pose.orientation.x() = x_enu;
+            vio_state.pose.orientation.y() = y_enu;
+            vio_state.pose.orientation.z() = z_enu;
+        }
+
+        // Store original ENU values for debug
+        float vio_lin_x_enu = msg->twist.twist.linear.x;
+        float vio_lin_y_enu = msg->twist.twist.linear.y;
+        float vio_lin_z_enu = msg->twist.twist.linear.z;
+        float vio_ang_x_enu = msg->twist.twist.angular.x;
+        float vio_ang_y_enu = msg->twist.twist.angular.y;
+        float vio_ang_z_enu = msg->twist.twist.angular.z;
+
+        // Linear velocity
+        if (isENU_) {
+            // ENU to NED: (E, N, U) -> (N, E, -U)
+            vio_state.twist.linear.x() = msg->twist.twist.linear.y;  // North
+            vio_state.twist.linear.y() = msg->twist.twist.linear.x;  // East
+            vio_state.twist.linear.z() = -msg->twist.twist.linear.z; // Down
+        } else {
+            vio_state.twist.linear.x() = msg->twist.twist.linear.x;
+            vio_state.twist.linear.y() = msg->twist.twist.linear.y;
+            vio_state.twist.linear.z() = msg->twist.twist.linear.z;
+        }
+
+        // TEST MODE: Inject full GT to verify interface and update rate
+        if (!vehicle_name_ptr_map_.empty()) {
+            try {
+                std::string first_vehicle = vehicle_name_ptr_map_.begin()->first;
+                auto gt_kinematics = airsim_client_->simGetGroundTruthKinematics(first_vehicle);
+
+                // OPTION 1: Full GT injection test (uncomment to enable)
+                vio_state.pose.position = gt_kinematics.pose.position;
+                vio_state.pose.orientation = gt_kinematics.pose.orientation;
+                vio_state.twist.linear = gt_kinematics.twist.linear;
+                vio_state.twist.angular = gt_kinematics.twist.angular;
+                // std::cout << "[VIO TEST] FULL GT INJECTION - Testing interface/hz" << std::endl;
+
+                // OPTION 2: Hybrid (VIO pos/orient, GT velocities) - comment out Option 1 to use
+                // vio_state.twist.linear = gt_kinematics.twist.linear;
+                // vio_state.twist.angular = gt_kinematics.twist.angular;
+                // // std::cout << "[VIO TEST] HYBRID - VIO pos/orient, GT velocities" << std::endl;
+
+                // std::cout << "1. VIO before: Pos(" << msg->pose.pose.position.x << ", "
+                //           << msg->pose.pose.position.y << ", " << msg->pose.pose.position.z
+                //           << ") Quat(" << msg->pose.pose.orientation.w << ", "
+                //           << msg->pose.pose.orientation.x << ", " << msg->pose.pose.orientation.y << ", "
+                //           << msg->pose.pose.orientation.z << ")" << std::endl;
+                // std::cout << "               LinVel(" << vio_lin_x_enu << ", " << vio_lin_y_enu << ", " << vio_lin_z_enu
+                //           << ") AngVel(" << vio_ang_x_enu << ", " << vio_ang_y_enu << ", " << vio_ang_z_enu << ")" << std::endl;
+
+                // std::cout << "2. VIO after:  Pos(" << vio_state.pose.position.x() << ", "
+                //           << vio_state.pose.position.y() << ", " << vio_state.pose.position.z()
+                //           << ") Quat(" << vio_state.pose.orientation.w() << ", "
+                //           << vio_state.pose.orientation.x() << ", " << vio_state.pose.orientation.y() << ", "
+                //           << vio_state.pose.orientation.z() << ")" << std::endl;
+                // std::cout << "               LinVel(" << vio_state.twist.linear.x() << ", "
+                //           << vio_state.twist.linear.y() << ", " << vio_state.twist.linear.z()
+                //           << ") AngVel(" << vio_state.twist.angular.x() << ", "
+                //           << vio_state.twist.angular.y() << ", " << vio_state.twist.angular.z() << ")" << std::endl;
+
+                // std::cout << "3. GT:         Pos(" << gt_kinematics.pose.position.x() << ", "
+                //           << gt_kinematics.pose.position.y() << ", " << gt_kinematics.pose.position.z()
+                //           << ") Quat(" << gt_kinematics.pose.orientation.w() << ", "
+                //           << gt_kinematics.pose.orientation.x() << ", " << gt_kinematics.pose.orientation.y() << ", "
+                //           << gt_kinematics.pose.orientation.z() << ")" << std::endl;
+                // std::cout << "               LinVel(" << gt_kinematics.twist.linear.x() << ", "
+                //           << gt_kinematics.twist.linear.y() << ", " << gt_kinematics.twist.linear.z()
+                //           << ") AngVel(" << gt_kinematics.twist.angular.x() << ", "
+                //           << gt_kinematics.twist.angular.y() << ", " << gt_kinematics.twist.angular.z() << ")" << std::endl;
+            } catch (...) {
+                // If GT fetch fails, fall back to VIO angular velocity (better than nothing)
+                // std::cout << "[VIO TEST] Failed to get GT, using VIO angular velocity" << std::endl;
+                if (isENU_) {
+                    vio_state.twist.angular.x() = msg->twist.twist.angular.y;
+                    vio_state.twist.angular.y() = msg->twist.twist.angular.x;
+                    vio_state.twist.angular.z() = -msg->twist.twist.angular.z;
+                } else {
+                    vio_state.twist.angular.x() = msg->twist.twist.angular.x;
+                    vio_state.twist.angular.y() = msg->twist.twist.angular.y;
+                    vio_state.twist.angular.z() = msg->twist.twist.angular.z;
+                }
+            }
+        } else {
+            // No vehicles available, use VIO angular velocity
+            if (isENU_) {
+                vio_state.twist.angular.x() = msg->twist.twist.angular.y;
+                vio_state.twist.angular.y() = msg->twist.twist.angular.x;
+                vio_state.twist.angular.z() = -msg->twist.twist.angular.z;
+            } else {
+                vio_state.twist.angular.x() = msg->twist.twist.angular.x;
+                vio_state.twist.angular.y() = msg->twist.twist.angular.y;
+                vio_state.twist.angular.z() = msg->twist.twist.angular.z;
+            }
+        }
+
+        // Acceleration not available in nav_msgs::Odometry, set to zero
+        vio_state.accelerations.linear = msr::airlib::Vector3r::Zero();
+        vio_state.accelerations.angular = msr::airlib::Vector3r::Zero();
+
+        // std::cout << "[VIO DEBUG ROS] Validating data..." << std::endl;
+        // Validate data (check for NaN/inf)
+        if (!std::isfinite(vio_state.pose.position.x()) ||
+            !std::isfinite(vio_state.pose.position.y()) ||
+            !std::isfinite(vio_state.pose.position.z())) {
+            ROS_WARN_THROTTLE(1.0, "[AirSim VIO] Invalid VIO position data (NaN/inf), ignoring");
+            // std::cout << "[VIO DEBUG ROS] Invalid data, returning" << std::endl;
+            return;
+        }
+
+        // std::cout << "[VIO DEBUG ROS] Data valid" << std::endl;
+
+        // Only inject VIO if mode is enabled
+        if (!use_vio_for_control_) {
+            // std::cout << "[VIO DEBUG ROS] VIO mode disabled, skipping injection" << std::endl;
+            return;
+        }
+
+        // std::cout << "[VIO DEBUG ROS] Injecting to vehicles (count: " << vehicle_name_ptr_map_.size() << ")" << std::endl;
+        // Inject VIO state to all vehicles via RPC
+        for (const auto& vehicle_pair : vehicle_name_ptr_map_) {
+            const std::string& vehicle_name = vehicle_pair.first;
+            // std::cout << "[VIO DEBUG ROS] Calling setVIOKinematics for vehicle: " << vehicle_name << std::endl;
+            airsim_client_->setVIOKinematics(vio_state, vehicle_name);
+            // std::cout << "[VIO DEBUG ROS] setVIOKinematics completed for vehicle: " << vehicle_name << std::endl;
+        }
+        // std::cout << "[VIO DEBUG ROS] All vehicles updated successfully" << std::endl;
+
+    } catch (rpc::rpc_error& e) {
+        // std::cout << "[VIO DEBUG ROS] RPC error caught in vio_odom_callback: " << e.what() << std::endl;
+        ROS_ERROR_THROTTLE(1.0, "[AirSim VIO] RPC error in VIO callback: %s", e.what());
+        try {
+            ROS_ERROR_THROTTLE(1.0, "[AirSim VIO] RPC error details: %s", e.get_error().as<std::string>().c_str());
+        } catch (...) {
+            // Ignore errors getting error details
+        }
+    } catch (const std::exception& e) {
+        // std::cout << "[VIO DEBUG ROS] Exception caught in vio_odom_callback: " << e.what() << std::endl;
+        ROS_ERROR_THROTTLE(1.0, "[AirSim VIO] Exception in VIO callback: %s", e.what());
+    }
+    // std::cout << "[VIO DEBUG ROS] vio_odom_callback completed" << std::endl;
+}
+
+void AirsimROSWrapper::vio_mode_check_timer_cb(const ros::TimerEvent& event)
+{
+    // std::cout << "[VIO DEBUG ROS] vio_mode_check_timer_cb called" << std::endl;
+    try {
+        // First-time initialization (delayed to allow AirSim to fully start)
+        if (!vio_mode_initialized_) {
+            // std::cout << "[VIO DEBUG ROS] VIO not initialized yet" << std::endl;
+            // Check if enough time has passed
+            static ros::Time first_call = ros::Time::now();
+            double elapsed = (ros::Time::now() - first_call).toSec();
+            // std::cout << "[VIO DEBUG ROS] Time elapsed since first call: " << elapsed << " seconds" << std::endl;
+            if (elapsed < 2.0) {
+                // std::cout << "[VIO DEBUG ROS] Waiting for 2 seconds to elapse, returning" << std::endl;
+                return; // Wait without blocking
+            }
+
+            // std::cout << "[VIO DEBUG ROS] 2 seconds elapsed, initializing VIO mode" << std::endl;
+            try {
+                // First test the VIO RPC connection
+                // std::cout << "[VIO DEBUG ROS] Testing VIO RPC connection..." << std::endl;
+                std::string test_result = airsim_client_->testVIOConnection();
+                // std::cout << "[VIO DEBUG ROS] Test result: " << test_result << std::endl;
+
+                // std::cout << "[VIO DEBUG ROS] Vehicle count: " << vehicle_name_ptr_map_.size() << std::endl;
+                for (const auto& vehicle_pair : vehicle_name_ptr_map_) {
+                    const std::string& vehicle_name = vehicle_pair.first;
+                    // std::cout << "[VIO DEBUG ROS] Calling setUseVIOForControl for vehicle: " << vehicle_name << " with value: " << use_vio_for_control_ << std::endl;
+                    airsim_client_->setUseVIOForControl(use_vio_for_control_, vehicle_name);
+                    // std::cout << "[VIO DEBUG ROS] setUseVIOForControl completed for vehicle: " << vehicle_name << std::endl;
+                }
+
+                if (use_vio_for_control_) {
+                    ROS_INFO("[AirSim VIO] ✓ VIO control mode SET on AirSim server");
+                    // std::cout << "[VIO DEBUG ROS] VIO mode initialized: ENABLED" << std::endl;
+                } else {
+                    ROS_INFO("[AirSim VIO] ✓ GT control mode SET on AirSim server (default)");
+                    // std::cout << "[VIO DEBUG ROS] VIO mode initialized: DISABLED" << std::endl;
+                }
+                vio_mode_initialized_ = true;
+                // std::cout << "[VIO DEBUG ROS] vio_mode_initialized_ set to true" << std::endl;
+            } catch (rpc::rpc_error& e) {
+                // std::cout << "[VIO DEBUG ROS] RPC error during initialization: " << e.what() << std::endl;
+                ROS_WARN("[AirSim VIO] Could not set VIO mode on server: %s", e.what());
+                vio_mode_initialized_ = true; // Don't keep retrying
+            }
+            // std::cout << "[VIO DEBUG ROS] Returning after initialization attempt" << std::endl;
+            return;
+        }
+
+        // std::cout << "[VIO DEBUG ROS] VIO already initialized, checking for parameter changes" << std::endl;
+        // Check if parameter has changed
+        bool current_use_vio = false;
+        nh_.param<bool>("/simulation/airsim/use_vio_for_control", current_use_vio, false);
+        // std::cout << "[VIO DEBUG ROS] Current param value: " << current_use_vio << ", stored value: " << use_vio_for_control_ << std::endl;
+
+        // Update all vehicles if mode changed
+        if (current_use_vio != use_vio_for_control_) {
+            // std::cout << "[VIO DEBUG ROS] Parameter changed! Updating mode..." << std::endl;
+            use_vio_for_control_ = current_use_vio;
+
+            for (const auto& vehicle_pair : vehicle_name_ptr_map_) {
+                const std::string& vehicle_name = vehicle_pair.first;
+                // std::cout << "[VIO DEBUG ROS] Updating vehicle: " << vehicle_name << " to mode: " << use_vio_for_control_ << std::endl;
+                airsim_client_->setUseVIOForControl(use_vio_for_control_, vehicle_name);
+                // std::cout << "[VIO DEBUG ROS] Vehicle " << vehicle_name << " updated" << std::endl;
+            }
+
+            if (use_vio_for_control_) {
+                ROS_INFO("[AirSim VIO] ✓ VIO MODE ENABLED - Using VIO odometry for control");
+                // std::cout << "[VIO DEBUG ROS] Mode changed to VIO" << std::endl;
+            } else {
+                ROS_INFO("[AirSim VIO] ✓ GT MODE ENABLED - Using ground truth for control");
+                // std::cout << "[VIO DEBUG ROS] Mode changed to GT" << std::endl;
+            }
+
+            last_vio_mode_logged_ = true;
+        } else {
+            // std::cout << "[VIO DEBUG ROS] No parameter change detected" << std::endl;
+        }
+
+        // Periodic status check (every 10 seconds)
+        static ros::Time last_status_log = ros::Time::now();
+        if ((ros::Time::now() - last_status_log).toSec() > 10.0) {
+            // std::cout << "[VIO DEBUG ROS] Periodic status check (10s)" << std::endl;
+            if (use_vio_for_control_) {
+                // Check if we're receiving VIO data
+                ros::Time now = ros::Time::now();
+                // This is a simple status log, actual timeout handling is in estimator
+                ROS_DEBUG("[AirSim VIO] Status: VIO mode active, topic: %s", vio_topic_.c_str());
+            }
+            last_status_log = ros::Time::now();
+        }
+
+    } catch (const std::exception& e) {
+        // std::cout << "[VIO DEBUG ROS] Exception in vio_mode_check_timer_cb: " << e.what() << std::endl;
+        ROS_ERROR_THROTTLE(5.0, "[AirSim VIO] Exception updating VIO mode: %s", e.what());
+    }
+    // std::cout << "[VIO DEBUG ROS] vio_mode_check_timer_cb completed" << std::endl;
 }

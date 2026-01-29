@@ -29,6 +29,8 @@ STRICT_MODE_OFF
 #include "common/common_utils/WindowsApisCommonPost.hpp"
 
 #include "api/RpcLibAdaptorsBase.hpp"
+#include "vehicles/multirotor/api/MultirotorApiBase.hpp"
+#include "vehicles/multirotor/firmwares/simple_flight/SimpleFlightApi.hpp"
 #include <functional>
 #include <thread>
 
@@ -507,6 +509,74 @@ namespace airlib
 
         pimpl_->server.bind("getSettingsString", [&]() -> std::string {
             return getWorldSimApi()->getSettingsString();
+        });
+
+        //====================================================================
+        // VIO Support: RPC API bindings
+        //====================================================================
+
+        // Simple test function to verify RPC binding works
+        pimpl_->server.bind("testVIOConnection", [&]() -> std::string {
+            // std::cout << "[VIO DEBUG] testVIOConnection called!" << std::endl;
+            // std::cout.flush();
+            return "VIO_CONNECTION_OK";
+        });
+
+        pimpl_->server.bind("setVIOKinematics", [&](const RpcLibAdaptorsBase::KinematicsState& vio_state, const std::string& vehicle_name) -> void {
+            // std::cout << "[VIO DEBUG] setVIOKinematics called for vehicle: " << vehicle_name << std::endl;
+            // std::cout.flush();
+            try {
+                auto* vehicle_api = getVehicleApi(vehicle_name);
+                // std::cout << "[VIO DEBUG] Calling setVIOKinematics on vehicle API..." << std::endl;
+                // std::cout.flush();
+                vehicle_api->setVIOKinematics(vio_state.to());
+                // std::cout << "[VIO DEBUG] setVIOKinematics completed successfully" << std::endl;
+                // std::cout.flush();
+            } catch (const std::exception& e) {
+                // std::cout << "[VIO DEBUG] Exception in setVIOKinematics: " << e.what() << std::endl;
+                // std::cout.flush();
+            } catch (...) {
+                // std::cout << "[VIO DEBUG] Unknown exception in setVIOKinematics" << std::endl;
+                // std::cout.flush();
+            }
+        });
+
+        pimpl_->server.bind("setUseVIOForControl", [&](bool use_vio, const std::string& vehicle_name) -> void {
+            // std::cout << "[VIO DEBUG] setUseVIOForControl called for vehicle: " << vehicle_name << " use_vio=" << use_vio << std::endl;
+            // std::cout.flush();
+            try {
+                auto* vehicle_api = getVehicleApi(vehicle_name);
+                // std::cout << "[VIO DEBUG] Calling setUseVIO on vehicle API..." << std::endl;
+                // std::cout.flush();
+                vehicle_api->setUseVIO(use_vio);
+                // std::cout << "[VIO DEBUG] setUseVIO completed successfully" << std::endl;
+                // std::cout.flush();
+            } catch (const std::exception& e) {
+                // std::cout << "[VIO DEBUG] Exception in setUseVIOForControl: " << e.what() << std::endl;
+                // std::cout.flush();
+            } catch (...) {
+                // std::cout << "[VIO DEBUG] Unknown exception in setUseVIOForControl" << std::endl;
+                // std::cout.flush();
+            }
+        });
+
+        pimpl_->server.bind("isUsingVIOForControl", [&](const std::string& vehicle_name) -> bool {
+            // std::cout << "[VIO DEBUG] isUsingVIOForControl called for vehicle: " << vehicle_name << std::endl;
+            // std::cout.flush();
+            try {
+                auto* vehicle_api = getVehicleApi(vehicle_name);
+                bool result = vehicle_api->isUsingVIO();
+                // std::cout << "[VIO DEBUG] isUsingVIO result: " << result << std::endl;
+                // std::cout.flush();
+                return result;
+            } catch (const std::exception& e) {
+                // std::cout << "[VIO DEBUG] Exception in isUsingVIOForControl: " << e.what() << std::endl;
+                // std::cout.flush();
+            } catch (...) {
+                // std::cout << "[VIO DEBUG] Unknown exception in isUsingVIOForControl" << std::endl;
+                // std::cout.flush();
+            }
+            return false;
         });
 
         //if we don't suppress then server will bomb out for exceptions raised by any method

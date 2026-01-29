@@ -83,18 +83,18 @@ namespace airlib
 
             // Gyrosocpe
             //convert arw to stddev
-            real_T gyro_sigma_arw = params_.gyro.arw / sqrt_dt;
+            real_T gyro_sigma_arw = params_.gyro.arw / sqrt_dt * 0.1;
             angular_velocity += gauss_dist.next() * gyro_sigma_arw + state_.gyroscope_bias;
             //update bias random walk
-            real_T gyro_sigma_bias = gyro_bias_stability_norm * sqrt_dt;
+            real_T gyro_sigma_bias = gyro_bias_stability_norm * sqrt_dt * 0.1;
             state_.gyroscope_bias += gauss_dist.next() * gyro_sigma_bias;
 
             //accelerometer
             //convert vrw to stddev
-            real_T accel_sigma_vrw = params_.accel.vrw / sqrt_dt;
+            real_T accel_sigma_vrw = params_.accel.vrw / sqrt_dt * 0.1;
             linear_acceleration += gauss_dist.next() * accel_sigma_vrw + state_.accelerometer_bias;
             //update bias random walk
-            real_T accel_sigma_bias = accel_bias_stability_norm * sqrt_dt;
+            real_T accel_sigma_bias = accel_bias_stability_norm * sqrt_dt * 0.1;
             state_.accelerometer_bias += gauss_dist.next() * accel_sigma_bias;
         }
 

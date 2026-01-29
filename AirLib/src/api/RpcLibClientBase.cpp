@@ -128,9 +128,8 @@ __pragma(warning(disable : 4239))
             //std::cout << "DroneServer is responding." << std::endl;
 
             std::cout << "Waiting for connection - " << std::flush;
-            const TTimeDelta pause_time = 1;
+            const TTimeDelta pause_time = 0.5;
             while (getConnectionState() != RpcLibClientBase::ConnectionState::Connected) {
-                std::cout << "X" << std::flush;
                 clock->sleep_for(pause_time);
             }
             std::cout << std::endl
@@ -634,6 +633,66 @@ __pragma(warning(disable : 4239))
         std::vector<std::string> RpcLibClientBase::simListAssets() const
         {
             return pimpl_->client.call("simListAssets").as<std::vector<std::string>>();
+        }
+
+        //====================================================================
+        // VIO Support Implementation
+        //====================================================================
+
+        void RpcLibClientBase::setVIOKinematics(const Kinematics::State& vio_state, const std::string& vehicle_name)
+        {
+            // std::cout << "[VIO DEBUG CLIENT] setVIOKinematics called for vehicle: " << vehicle_name << std::endl;
+            RpcLibAdaptorsBase::KinematicsState conv_state(vio_state);
+            // std::cout << "[VIO DEBUG CLIENT] Converted state, calling RPC..." << std::endl;
+            pimpl_->client.call("setVIOKinematics", conv_state, vehicle_name);
+            // std::cout << "[VIO DEBUG CLIENT] setVIOKinematics RPC completed" << std::endl;
+        }
+
+        std::string RpcLibClientBase::testVIOConnection()
+        {
+            // std::cout << "[VIO DEBUG CLIENT] testVIOConnection called" << std::endl;
+            // std::cout.flush();
+            try {
+                std::string result = pimpl_->client.call("testVIOConnection").as<std::string>();
+                // std::cout << "[VIO DEBUG CLIENT] testVIOConnection result: " << result << std::endl;
+                // std::cout.flush();
+                return result;
+            } catch (const std::exception& e) {
+                // std::cout << "[VIO DEBUG CLIENT] Exception in testVIOConnection: " << e.what() << std::endl;
+                // std::cout.flush();
+                throw;
+            }
+        }
+
+        void RpcLibClientBase::setUseVIOForControl(bool use_vio, const std::string& vehicle_name)
+        {
+            // std::cout << "[VIO DEBUG CLIENT] setUseVIOForControl called for vehicle: " << vehicle_name << " use_vio=" << use_vio << std::endl;
+            // std::cout.flush();
+            try {
+                // std::cout << "[VIO DEBUG CLIENT] About to call RPC..." << std::endl;
+                // std::cout.flush();
+                pimpl_->client.call("setUseVIOForControl", use_vio, vehicle_name);
+                // std::cout << "[VIO DEBUG CLIENT] RPC call returned" << std::endl;
+                // std::cout.flush();
+            } catch (const std::exception& e) {
+                // std::cout << "[VIO DEBUG CLIENT] Exception in RPC call: " << e.what() << std::endl;
+                // std::cout.flush();
+                throw;
+            } catch (...) {
+                // std::cout << "[VIO DEBUG CLIENT] Unknown exception in RPC call" << std::endl;
+                // std::cout.flush();
+                throw;
+            }
+            // std::cout << "[VIO DEBUG CLIENT] setUseVIOForControl RPC completed" << std::endl;
+            // std::cout.flush();
+        }
+
+        bool RpcLibClientBase::isUsingVIOForControl(const std::string& vehicle_name) const
+        {
+            // std::cout << "[VIO DEBUG CLIENT] isUsingVIOForControl called for vehicle: " << vehicle_name << std::endl;
+            bool result = pimpl_->client.call("isUsingVIOForControl", vehicle_name).as<bool>();
+            // std::cout << "[VIO DEBUG CLIENT] isUsingVIOForControl result: " << result << std::endl;
+            return result;
         }
 
         void* RpcLibClientBase::getClient()

@@ -167,6 +167,44 @@ namespace airlib
 
         std::vector<std::string> simListAssets() const;
 
+        //====================================================================
+        // VIO Support: Inject VIO odometry into AirSim's state estimator
+        //====================================================================
+
+        /**
+         * Set VIO kinematics for the vehicle's state estimator
+         * This allows external VIO systems (e.g., FAST-LIVO) to inject odometry
+         * into AirSim's internal control loop, enabling realistic drift behavior
+         *
+         * @param vio_state: VIO-estimated kinematics state
+         * @param vehicle_name: Name of the vehicle (default: "")
+         */
+        void setVIOKinematics(const Kinematics::State& vio_state, const std::string& vehicle_name = "");
+
+        /**
+         * Test VIO RPC connection
+         *
+         * @return "VIO_CONNECTION_OK" if connection works
+         */
+        std::string testVIOConnection();
+
+        /**
+         * Enable or disable VIO mode for control
+         * When enabled, the vehicle's controller uses VIO estimates instead of ground truth
+         *
+         * @param use_vio: true = use VIO for control, false = use ground truth
+         * @param vehicle_name: Name of the vehicle (default: "")
+         */
+        void setUseVIOForControl(bool use_vio, const std::string& vehicle_name = "");
+
+        /**
+         * Check if VIO mode is enabled for control
+         *
+         * @param vehicle_name: Name of the vehicle (default: "")
+         * @return true if VIO control is enabled
+         */
+        bool isUsingVIOForControl(const std::string& vehicle_name = "") const;
+
     protected:
         void* getClient();
         const void* getClient() const;

@@ -388,6 +388,23 @@ private:
     ros::Subscriber gimbal_angle_quat_cmd_sub_;
     ros::Subscriber gimbal_angle_euler_cmd_sub_;
 
+    //====================================================================
+    // VIO Support: VIO odometry injection
+    //====================================================================
+    ros::Subscriber vio_odom_sub_;
+    ros::Timer vio_mode_check_timer_;
+    bool use_vio_for_control_ = false;
+    bool vio_mode_initialized_ = false;
+    bool last_vio_mode_logged_ = false;
+    std::string vio_topic_;
+    void vio_odom_callback(const nav_msgs::Odometry::ConstPtr& msg);
+    void vio_mode_check_timer_cb(const ros::TimerEvent& event);
+
+    // VIO orientation auto-alignment
+    bool vio_orientation_aligned_ = false;
+    msr::airlib::Quaternionr vio_orientation_offset_;  // VIO to World frame offset
+    msr::airlib::Vector3r vio_position_offset_;  // VIO to World position offset
+
     static constexpr char CAM_YML_NAME[] = "camera_name";
     static constexpr char WIDTH_YML_NAME[] = "image_width";
     static constexpr char HEIGHT_YML_NAME[] = "image_height";
