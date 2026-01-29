@@ -203,28 +203,6 @@ Some methods may not be applicable to specific vehicle in which case an exceptio
             }
         };
 
-        //====================================================================
-        // VIO Support: Virtual methods for VIO injection
-        // Default implementation does nothing (for vehicles that don't support VIO)
-        //====================================================================
-        virtual void setVIOKinematics(const Kinematics::State& vio_state)
-        {
-            unused(vio_state);
-            // Default: do nothing (vehicle doesn't support VIO)
-        }
-
-        virtual void setUseVIO(bool use_vio)
-        {
-            unused(use_vio);
-            // Default: do nothing (vehicle doesn't support VIO)
-        }
-
-        virtual bool isUsingVIO() const
-        {
-            // Default: VIO not supported
-            return false;
-        }
-
     private:
         const SensorBase* findSensorByName(const std::string& sensor_name, const SensorBase::SensorType type) const
         {
