@@ -392,6 +392,8 @@ private:
     // VIO Support: VIO odometry injection
     //====================================================================
     ros::Subscriber vio_odom_sub_;
+    ros::Publisher vio_debug_gt_pub_;
+    ros::Publisher vio_debug_est_pub_;
     ros::Timer vio_mode_check_timer_;
     bool use_vio_for_control_ = false;
     bool vio_mode_initialized_ = false;

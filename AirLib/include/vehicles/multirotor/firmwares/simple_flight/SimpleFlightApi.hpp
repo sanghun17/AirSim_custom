@@ -16,7 +16,6 @@
 #include "AirSimSimpleFlightEstimator.hpp"
 #include "AirSimSimpleFlightCommon.hpp"
 #include "physics/PhysicsBody.hpp"
-#include "physics/FastPhysicsEngine.hpp"
 #include "common/AirSimSettings.hpp"
 
 //TODO: we need to protect contention between physics thread and API server thread
@@ -56,28 +55,23 @@ namespace airlib
         }
 
         //====================================================================
-        // VIO Support: Uses FastPhysicsEngine static interface
+        // VIO Support: Updates Estimator only (hybrid mode)
+        // Position/velocity from VIO, orientation/angular from GT
         //====================================================================
         virtual void setVIOKinematics(const Kinematics::State& vio_state) override
         {
-            // Get physics body via parent and pass to FastPhysicsEngine
-            auto* parent = getParent();
-            if (parent) {
-                auto* body = parent->getPhysicsBody();
-                if (body) {
-                    FastPhysicsEngine::setVIOPending(static_cast<PhysicsBody*>(body), vio_state);
-                }
-            }
+            // Update estimator with VIO data (position and linear velocity will be used)
+            estimator_->setVIOKinematics(vio_state);
         }
 
         virtual void setUseVIO(bool use_vio) override
         {
-            FastPhysicsEngine::setVIOEnabled(use_vio);
+            estimator_->setUseVIO(use_vio);
         }
 
         virtual bool isUsingVIO() const override
         {
-            return FastPhysicsEngine::isVIOEnabled();
+            return estimator_->isUsingVIO();
         }
 
         virtual void update() override

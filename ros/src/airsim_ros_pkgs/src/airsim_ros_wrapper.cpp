@@ -125,6 +125,10 @@ void AirsimROSWrapper::initialize_ros()
     // Subscribe to VIO odometry topic
     vio_odom_sub_ = nh_.subscribe(vio_topic_, 1, &AirsimROSWrapper::vio_odom_callback, this);
 
+    // Debug publishers: GT and estimated state for comparison
+    vio_debug_gt_pub_ = nh_.advertise<nav_msgs::Odometry>("/airsim/debug/gt_odom", 10);
+    vio_debug_est_pub_ = nh_.advertise<nav_msgs::Odometry>("/airsim/debug/estimated_odom", 10);
+
     // Create timer to check VIO mode updates
     vio_mode_check_timer_ = nh_.createTimer(ros::Duration(1.0 / vio_update_rate), &AirsimROSWrapper::vio_mode_check_timer_cb, this);
 
@@ -1813,6 +1817,32 @@ void AirsimROSWrapper::vio_odom_callback(const nav_msgs::Odometry::ConstPtr& msg
         for (const auto& vehicle_pair : vehicle_name_ptr_map_) {
             const std::string& vehicle_name = vehicle_pair.first;
             airsim_client_->setVIOKinematics(vio_state, vehicle_name);
+
+            // Publish debug: GT and estimated state
+            try {
+                auto gt = airsim_client_->simGetGroundTruthKinematics(vehicle_name);
+
+                nav_msgs::Odometry gt_msg;
+                gt_msg.header.stamp = ros::Time::now();
+                gt_msg.header.frame_id = "odom";
+                // NED to ENU for consistency with other topics
+                gt_msg.pose.pose.position.x = gt.pose.position.y();
+                gt_msg.pose.pose.position.y = gt.pose.position.x();
+                gt_msg.pose.pose.position.z = -gt.pose.position.z();
+                vio_debug_gt_pub_.publish(gt_msg);
+
+                // Actual estimator output (GT + VIO residual) from controller
+                auto drone_state = get_multirotor_client()->getMultirotorState(vehicle_name);
+                const auto& est_kin = drone_state.kinematics_estimated;
+                nav_msgs::Odometry est_msg;
+                est_msg.header.stamp = ros::Time::now();
+                est_msg.header.frame_id = "odom";
+                // NED to ENU
+                est_msg.pose.pose.position.x = est_kin.pose.position.y();
+                est_msg.pose.pose.position.y = est_kin.pose.position.x();
+                est_msg.pose.pose.position.z = -est_kin.pose.position.z();
+                vio_debug_est_pub_.publish(est_msg);
+            } catch (...) {}
         }
 
     } catch (rpc::rpc_error& e) {

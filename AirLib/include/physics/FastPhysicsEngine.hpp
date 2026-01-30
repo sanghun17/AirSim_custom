@@ -112,16 +112,10 @@ namespace airlib
             getNextKinematicsNoCollision(dt, body, current, next, next_wrench, wind_);
 
             //====================================================================
-            // VIO Support: Replace physics-calculated kinematics with VIO data
+            // VIO Support: DISABLED - Physics override removed
+            // VIO now only affects Estimator (position/velocity from VIO, attitude from GT)
+            // This allows realistic controller behavior with physics-based motion
             //====================================================================
-            if (vio_pending_ref() && vio_body_ref() == &body) {
-                // Replace pose and twist with VIO data
-                next.pose = vio_state_ref().pose;
-                next.twist = vio_state_ref().twist;
-                // Clear pending flag
-                vio_pending_ref() = false;
-                vio_body_ref() = nullptr;
-            }
 
             //if there is collision, see if we need collision response
             const CollisionInfo collision_info = body.getCollisionInfo();

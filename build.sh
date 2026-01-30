@@ -142,6 +142,10 @@ for d in Unreal/Environments/* ; do
     rsync -a --delete Unreal/Plugins/AirSim $d/Plugins
 done
 
+# Sync to custom MyFirstUE4 project
+echo "Syncing AirSim plugin to MyFirstUE4 project..."
+rsync -a --delete Unreal/Plugins/AirSim "/home/ml/Documents/Unreal Projects/MyFirstUE4/Plugins/"
+
 set +x
 
 echo ""
