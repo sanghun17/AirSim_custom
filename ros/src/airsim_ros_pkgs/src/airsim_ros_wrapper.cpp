@@ -918,8 +918,9 @@ sensor_msgs::Imu AirsimROSWrapper::get_imu_msg_from_airsim(const msr::airlib::Im
     // imu_msg.linear_acceleration.z = imu_data.linear_acceleration.z();
 
     // modified at 0806 : same as mavros!
+    // timestamp changed to ros::Time::now() to match camera/depth publishers (wall clock)
     sensor_msgs::Imu imu_msg;
-    imu_msg.header.stamp = airsim_timestamp_to_ros(imu_data.time_stamp);
+    imu_msg.header.stamp = ros::Time::now();
     imu_msg.orientation.x = imu_data.orientation.x();
     imu_msg.orientation.y = imu_data.orientation.y();
     imu_msg.orientation.z = imu_data.orientation.z();
@@ -1616,13 +1617,24 @@ void AirsimROSWrapper::vio_odom_callback(const nav_msgs::Odometry::ConstPtr& msg
         // Compact debug output with GT comparison
         // std::cout << "\n=== VIO Data (isENU: " << isENU_ << ") ===" << std::endl;
 
-        // Position (handle frame conversion if needed)
+        // =============================================================================
+        // POSITION: camera_init FLU → NED
+        // =============================================================================
+        // FAST-LIVO2 position is in camera_init world frame (FLU convention).
+        // camera_init axes: x=Forward, y=Left, z=Up (of initial sensor pose).
+        // For a gravity-aligned sensor, this is equivalent to a local ENU-like frame
+        // where (x,y,z) ≈ (East-ish, North-ish, Up) depending on initial heading.
+        //
+        // The axis swap (y,x,-z) converts FLU→NED-like axes. This is NOT a proper
+        // ENU→NED conversion (which would require knowing the initial heading), but
+        // combined with the position offset computed at VIO enable, it produces correct
+        // NED positions relative to the AirSim world origin.
+        //
+        // HARDCODED FLIP: x↔y swap and z-negation
         if (isENU_) {
-            // VIO is in ENU, convert to NED for AirSim
-            // ENU to NED: (E, N, U) -> (N, E, -U)
-            vio_state.pose.position.x() = msg->pose.pose.position.y;  // North
-            vio_state.pose.position.y() = msg->pose.pose.position.x;  // East
-            vio_state.pose.position.z() = -msg->pose.pose.position.z; // Down (negate Up)
+            vio_state.pose.position.x() = msg->pose.pose.position.y;  // swap: FLU-y → NED-x
+            vio_state.pose.position.y() = msg->pose.pose.position.x;  // swap: FLU-x → NED-y
+            vio_state.pose.position.z() = -msg->pose.pose.position.z; // negate: FLU-z(Up) → NED-z(Down)
         } else {
             // Already in NED/AirSim frame
             vio_state.pose.position.x() = msg->pose.pose.position.x;
@@ -1630,51 +1642,69 @@ void AirsimROSWrapper::vio_odom_callback(const nav_msgs::Odometry::ConstPtr& msg
             vio_state.pose.position.z() = msg->pose.pose.position.z;
         }
 
-        // Position debug will be printed later with velocities
-
-        // Orientation (quaternion) - ENU to NED transformation
+        // =============================================================================
+        // ORIENTATION: camera_init FLU quat → NED quat (with offset correction)
+        // =============================================================================
+        // FAST-LIVO2 quaternion is in camera_init FLU frame.
+        //
+        // Step 1: Axis swap (w, x, y, z) → (w, y, x, -z)
+        //   This is the same swap pattern as position. It approximately converts
+        //   FLU quaternion components to NED-like components. However, this is NOT a
+        //   mathematically rigorous FLU→NED quaternion conversion — it introduces a
+        //   systematic rotation error (~80-90° depending on initial heading).
+        //
+        // Step 2: Offset multiplication (one-time calibration)
+        //   offset = GT_orient * swapped_VIO_orient^{-1}
+        //   The offset absorbs the axis-swap error plus the unknown heading difference
+        //   between camera_init and AirSim NED. Applied as: aligned = offset * swapped.
+        //   This offset is recomputed each time VIO is enabled (vio_orientation_aligned_
+        //   is reset on VIO enable).
+        //
+        // CAUTION: The axis swap alone gives WRONG orientation. The offset is essential.
+        // CAUTION: vio_orientation_aligned_ is reset when VIO is toggled on, so both
+        //   the orientation offset AND vio_init_gt_orientation_ are recaptured fresh.
+        //
+        // HARDCODED FLIP: quaternion component swap (w,y,x,-z)
         float w_enu = msg->pose.pose.orientation.w;
         float x_enu = msg->pose.pose.orientation.x;
         float y_enu = msg->pose.pose.orientation.y;
         float z_enu = msg->pose.pose.orientation.z;
 
         if (isENU_) {
-            // Quaternion debug will be printed later
-
-            // ENU to NED quaternion transformation (axis reordering)
-            // ENU: x=East, y=North, z=Up
-            // NED: x=North, y=East, z=Down
-            // Simple axis swap for quaternion components
             vio_state.pose.orientation.w() = w_enu;
-            vio_state.pose.orientation.x() = y_enu;   // NED-x (North) from ENU-y
-            vio_state.pose.orientation.y() = x_enu;   // NED-y (East) from ENU-x
-            vio_state.pose.orientation.z() = -z_enu;  // NED-z (Down) from -ENU-z
+            vio_state.pose.orientation.x() = y_enu;   // swap x↔y
+            vio_state.pose.orientation.y() = x_enu;   // swap x↔y
+            vio_state.pose.orientation.z() = -z_enu;  // negate z
 
-            // Auto-align VIO orientation to Ground Truth on first frame
+            // Auto-align on first VIO message after enable.
+            // Captures both orientation offset AND initial GT orientation for velocity.
             if (!vio_orientation_aligned_ && !vehicle_name_ptr_map_.empty()) {
                 try {
                     std::string first_vehicle = vehicle_name_ptr_map_.begin()->first;
                     auto gt_pose = airsim_client_->simGetVehiclePose(first_vehicle);
 
-                    // Calculate offset: GT * VIO^-1
+                    // Orientation offset: corrects axis-swap error + heading difference
                     msr::airlib::Quaternionr vio_quat_ned = vio_state.pose.orientation;
                     vio_orientation_offset_ = gt_pose.orientation * vio_quat_ned.inverse();
 
-                    vio_orientation_aligned_ = true;
+                    // Initial GT yaw for velocity rotation (see velocity section below).
+                    // camera_init FRD and NED are both gravity-aligned (z = Down),
+                    // so only yaw rotation is needed. Including pitch/roll would
+                    // incorrectly mix horizontal velocity into the vertical axis.
+                    {
+                        float pitch, roll, yaw;
+                        msr::airlib::VectorMath::toEulerianAngle(gt_pose.orientation, pitch, roll, yaw);
+                        vio_init_gt_orientation_ = msr::airlib::VectorMath::toQuaternion(0, 0, yaw);
+                    }
 
-                    // std::cout << "[VIO AUTO-ALIGN] Orientation offset calculated: Quat("
-                    //           << vio_orientation_offset_.w() << ", "
-                    //           << vio_orientation_offset_.x() << ", "
-                    //           << vio_orientation_offset_.y() << ", "
-                    //           << vio_orientation_offset_.z() << ")" << std::endl;
+                    vio_orientation_aligned_ = true;
                 } catch (const std::exception& e) {
-                    // std::cout << "[VIO AUTO-ALIGN] Failed to get GT pose: " << e.what() << std::endl;
+                    // Failed to get GT pose - will retry on next VIO message
                 }
             }
 
-            // Apply orientation offset if aligned
+            // Apply orientation offset
             if (vio_orientation_aligned_) {
-                // Align orientation
                 msr::airlib::Quaternionr aligned_quat = vio_orientation_offset_ * vio_state.pose.orientation;
                 vio_state.pose.orientation = aligned_quat;
             }
@@ -1686,111 +1716,84 @@ void AirsimROSWrapper::vio_odom_callback(const nav_msgs::Odometry::ConstPtr& msg
             vio_state.pose.orientation.z() = z_enu;
         }
 
-        // Store original ENU values for debug
-        float vio_lin_x_enu = msg->twist.twist.linear.x;
-        float vio_lin_y_enu = msg->twist.twist.linear.y;
-        float vio_lin_z_enu = msg->twist.twist.linear.z;
-        float vio_ang_x_enu = msg->twist.twist.angular.x;
-        float vio_ang_y_enu = msg->twist.twist.angular.y;
-        float vio_ang_z_enu = msg->twist.twist.angular.z;
-
-        // Linear velocity
+        // =============================================================================
+        // VELOCITY: camera_init FLU → NED (two-step conversion)
+        // =============================================================================
+        // FAST-LIVO2 velocity (_state.vel_end in LIVMapper.cpp) is in the camera_init
+        // WORLD frame with FLU convention. This is NOT body frame — verified empirically:
+        //   Test: VIO init at yaw=0°, drone flies at yaw=90°
+        //   Result: FLU→FRD velocity ≈ gt_ned (world frame), ≠ gt_body (body frame)
+        //   At yaw=90° moving East: cam_frd=(-0.06, 2.67, 0.06) ≈ gt_ned=(0.04, 2.68, 0.10)
+        //   Previous tests at constant heading were misleading (camera_init = body when no yaw change).
+        //
+        // Step 1: FLU → FRD (hardcoded axis flip)
+        //   Negates y and z: (x, -y, -z). This converts camera_init FLU to camera_init FRD.
+        //   The FRD axes align with the body FRD axes at the time of VIO initialization.
+        //
+        // Step 2: R(GT_init) rotation (camera_init FRD → NED)
+        //   vio_init_gt_orientation_ is the AirSim GT body quaternion captured when VIO was enabled.
+        //   VectorMath::rotateVector(v, q, true) = q * v * q^{-1} = body→world rotation.
+        //   Since camera_init FRD = initial body FRD, this correctly gives NED.
+        //
+        // CAUTION: Position uses (y,x,-z) swap, but velocity uses (x,-y,-z) + rotation.
+        //   These are DIFFERENT conversions because position offset absorbs the heading error,
+        //   while velocity needs explicit rotation by the initial heading.
+        // CAUTION: vio_init_gt_orientation_ must match the camera_init heading.
+        //   It is recaptured each time VIO is enabled (vio_orientation_aligned_ reset).
+        //   If FAST-LIVO2 restarts (new camera_init), VIO must be toggled off/on.
+        //
+        // HARDCODED FLIP: y-negation and z-negation in Step 1
         if (isENU_) {
-            // ENU to NED: (E, N, U) -> (N, E, -U)
-            vio_state.twist.linear.x() = msg->twist.twist.linear.y;  // North
-            vio_state.twist.linear.y() = msg->twist.twist.linear.x;  // East
-            vio_state.twist.linear.z() = -msg->twist.twist.linear.z; // Down
+            // Step 1: FLU → FRD (camera_init FRD)
+            vio_state.twist.linear.x() = msg->twist.twist.linear.x;     // forward (same)
+            vio_state.twist.linear.y() = -msg->twist.twist.linear.y;    // right = -left
+            vio_state.twist.linear.z() = -msg->twist.twist.linear.z;    // down = -up
+            // Step 2: Rotate camera_init FRD → NED using initial GT orientation
+            if (vio_orientation_aligned_) {
+                vio_state.twist.linear = msr::airlib::VectorMath::rotateVector(
+                    vio_state.twist.linear, vio_init_gt_orientation_, true);
+            }
         } else {
             vio_state.twist.linear.x() = msg->twist.twist.linear.x;
             vio_state.twist.linear.y() = msg->twist.twist.linear.y;
             vio_state.twist.linear.z() = msg->twist.twist.linear.z;
         }
 
-        // Angular velocity
-        if (isENU_) {
-            // ENU to NED: swap x/y and negate z
-            vio_state.twist.angular.x() = msg->twist.twist.angular.y;
-            vio_state.twist.angular.y() = msg->twist.twist.angular.x;
-            vio_state.twist.angular.z() = -msg->twist.twist.angular.z;
-        } else {
-            vio_state.twist.angular.x() = msg->twist.twist.angular.x;
-            vio_state.twist.angular.y() = msg->twist.twist.angular.y;
-            vio_state.twist.angular.z() = msg->twist.twist.angular.z;
-        }
+        // Angular velocity: NOT used by estimator (always uses GT angular velocity at ~333Hz).
+        // Left as zero-initialized in vio_state.
 
-        // TEST MODE: Inject full GT to verify interface and update rate
-        // DISABLED - Use actual VIO data
+        // DEBUG: Compare VIO raw, converted, and GT for pos/vel/yaw (disabled for production)
+        // To re-enable, uncomment the block below.
         /*
         if (!vehicle_name_ptr_map_.empty()) {
             try {
                 std::string first_vehicle = vehicle_name_ptr_map_.begin()->first;
-                auto gt_kinematics = airsim_client_->simGetGroundTruthKinematics(first_vehicle);
-
-                // OPTION 1: Full GT injection test (uncomment to enable)
-                vio_state.pose.position = gt_kinematics.pose.position;
-                vio_state.pose.orientation = gt_kinematics.pose.orientation;
-                vio_state.twist.linear = gt_kinematics.twist.linear;
-                vio_state.twist.angular = gt_kinematics.twist.angular;
-                // std::cout << "[VIO TEST] FULL GT INJECTION - Testing interface/hz" << std::endl;
-
-                // OPTION 2: Hybrid (VIO pos/orient, GT velocities) - comment out Option 1 to use
-                // vio_state.twist.linear = gt_kinematics.twist.linear;
-                // vio_state.twist.angular = gt_kinematics.twist.angular;
-                // // std::cout << "[VIO TEST] HYBRID - VIO pos/orient, GT velocities" << std::endl;
-
-                // std::cout << "1. VIO before: Pos(" << msg->pose.pose.position.x << ", "
-                //           << msg->pose.pose.position.y << ", " << msg->pose.pose.position.z
-                //           << ") Quat(" << msg->pose.pose.orientation.w << ", "
-                //           << msg->pose.pose.orientation.x << ", " << msg->pose.pose.orientation.y << ", "
-                //           << msg->pose.pose.orientation.z << ")" << std::endl;
-                // std::cout << "               LinVel(" << vio_lin_x_enu << ", " << vio_lin_y_enu << ", " << vio_lin_z_enu
-                //           << ") AngVel(" << vio_ang_x_enu << ", " << vio_ang_y_enu << ", " << vio_ang_z_enu << ")" << std::endl;
-
-                // std::cout << "2. VIO after:  Pos(" << vio_state.pose.position.x() << ", "
-                //           << vio_state.pose.position.y() << ", " << vio_state.pose.position.z()
-                //           << ") Quat(" << vio_state.pose.orientation.w() << ", "
-                //           << vio_state.pose.orientation.x() << ", " << vio_state.pose.orientation.y() << ", "
-                //           << vio_state.pose.orientation.z() << ")" << std::endl;
-                // std::cout << "               LinVel(" << vio_state.twist.linear.x() << ", "
-                //           << vio_state.twist.linear.y() << ", " << vio_state.twist.linear.z()
-                //           << ") AngVel(" << vio_state.twist.angular.x() << ", "
-                //           << vio_state.twist.angular.y() << ", " << vio_state.twist.angular.z() << ")" << std::endl;
-
-                // std::cout << "3. GT:         Pos(" << gt_kinematics.pose.position.x() << ", "
-                //           << gt_kinematics.pose.position.y() << ", " << gt_kinematics.pose.position.z()
-                //           << ") Quat(" << gt_kinematics.pose.orientation.w() << ", "
-                //           << gt_kinematics.pose.orientation.x() << ", " << gt_kinematics.pose.orientation.y() << ", "
-                //           << gt_kinematics.pose.orientation.z() << ")" << std::endl;
-                // std::cout << "               LinVel(" << gt_kinematics.twist.linear.x() << ", "
-                //           << gt_kinematics.twist.linear.y() << ", " << gt_kinematics.twist.linear.z()
-                //           << ") AngVel(" << gt_kinematics.twist.angular.x() << ", "
-                //           << gt_kinematics.twist.angular.y() << ", " << gt_kinematics.twist.angular.z() << ")" << std::endl;
-            } catch (...) {
-                // If GT fetch fails, fall back to VIO angular velocity (better than nothing)
-                // std::cout << "[VIO TEST] Failed to get GT, using VIO angular velocity" << std::endl;
-                if (isENU_) {
-                    vio_state.twist.angular.x() = msg->twist.twist.angular.y;
-                    vio_state.twist.angular.y() = msg->twist.twist.angular.x;
-                    vio_state.twist.angular.z() = -msg->twist.twist.angular.z;
-                } else {
-                    vio_state.twist.angular.x() = msg->twist.twist.angular.x;
-                    vio_state.twist.angular.y() = msg->twist.twist.angular.y;
-                    vio_state.twist.angular.z() = msg->twist.twist.angular.z;
-                }
-            }
-        } else {
-            // No vehicles available, use VIO angular velocity
-            if (isENU_) {
-                vio_state.twist.angular.x() = msg->twist.twist.angular.y;
-                vio_state.twist.angular.y() = msg->twist.twist.angular.x;
-                vio_state.twist.angular.z() = -msg->twist.twist.angular.z;
-            } else {
-                vio_state.twist.angular.x() = msg->twist.twist.angular.x;
-                vio_state.twist.angular.y() = msg->twist.twist.angular.y;
-                vio_state.twist.angular.z() = msg->twist.twist.angular.z;
-            }
+                auto gt_kin = airsim_client_->simGetGroundTruthKinematics(first_vehicle);
+                float yaw_raw = atan2(2.0f * (w_enu * z_enu + x_enu * y_enu),
+                                      1.0f - 2.0f * (y_enu * y_enu + z_enu * z_enu)) * 180.0f / M_PI;
+                float yaw_conv = msr::airlib::VectorMath::getYaw(vio_state.pose.orientation) * 180.0f / M_PI;
+                float yaw_gt = msr::airlib::VectorMath::getYaw(gt_kin.pose.orientation) * 180.0f / M_PI;
+                auto vel_diff_ned = vio_state.twist.linear - gt_kin.twist.linear;
+                msr::airlib::Vector3r cam_frd(msg->twist.twist.linear.x, -msg->twist.twist.linear.y, -msg->twist.twist.linear.z);
+                auto pos_diff = vio_state.pose.position - gt_kin.pose.position;
+                ROS_INFO_THROTTLE(0.2,
+                    "[VIO_FULL] yaw: raw=%.1f conv=%.1f gt=%.1f | pos: raw=(%.2f,%.2f,%.2f) conv=(%.2f,%.2f,%.2f) gt=(%.2f,%.2f,%.2f) pdiff=(%.2f,%.2f,%.2f)",
+                    yaw_raw, yaw_conv, yaw_gt,
+                    msg->pose.pose.position.x, msg->pose.pose.position.y, msg->pose.pose.position.z,
+                    vio_state.pose.position.x(), vio_state.pose.position.y(), vio_state.pose.position.z(),
+                    gt_kin.pose.position.x(), gt_kin.pose.position.y(), gt_kin.pose.position.z(),
+                    pos_diff.x(), pos_diff.y(), pos_diff.z());
+                ROS_INFO_THROTTLE(0.2,
+                    "[VIO_FULL] vel: cam_frd=(%.3f,%.3f,%.3f) vio_ned=(%.3f,%.3f,%.3f) gt_ned=(%.3f,%.3f,%.3f) ndiff=(%.3f,%.3f,%.3f)",
+                    cam_frd.x(), cam_frd.y(), cam_frd.z(),
+                    vio_state.twist.linear.x(), vio_state.twist.linear.y(), vio_state.twist.linear.z(),
+                    gt_kin.twist.linear.x(), gt_kin.twist.linear.y(), gt_kin.twist.linear.z(),
+                    vel_diff_ned.x(), vel_diff_ned.y(), vel_diff_ned.z());
+            } catch (...) {}
         }
         */
+
+        // (Stale GT injection test blocks removed — no longer needed)
 
         // Acceleration not available in nav_msgs::Odometry, set to zero
         vio_state.accelerations.linear = msr::airlib::Vector3r::Zero();
@@ -1819,28 +1822,33 @@ void AirsimROSWrapper::vio_odom_callback(const nav_msgs::Odometry::ConstPtr& msg
             airsim_client_->setVIOKinematics(vio_state, vehicle_name);
 
             // Publish debug: GT and estimated state
+            // Both use getMultirotorState() for consistent coordinate frame
             try {
-                auto gt = airsim_client_->simGetGroundTruthKinematics(vehicle_name);
+                auto drone_state = get_multirotor_client()->getMultirotorState(vehicle_name);
 
+                // GT: from getMultirotorState (same coord frame as estimator)
+                auto gt = airsim_client_->simGetGroundTruthKinematics(vehicle_name);
                 nav_msgs::Odometry gt_msg;
                 gt_msg.header.stamp = ros::Time::now();
                 gt_msg.header.frame_id = "odom";
-                // NED to ENU for consistency with other topics
-                gt_msg.pose.pose.position.x = gt.pose.position.y();
-                gt_msg.pose.pose.position.y = gt.pose.position.x();
-                gt_msg.pose.pose.position.z = -gt.pose.position.z();
+                gt_msg.pose.pose.position.x = gt.pose.position.x();
+                gt_msg.pose.pose.position.y = gt.pose.position.y();
+                gt_msg.pose.pose.position.z = gt.pose.position.z();
+                gt_msg.twist.twist.linear.x = gt.twist.linear.x();
+                gt_msg.twist.twist.linear.y = gt.twist.linear.y();
+                gt_msg.twist.twist.linear.z = gt.twist.linear.z();
+                if (isENU_) {
+                    std::swap(gt_msg.pose.pose.position.x, gt_msg.pose.pose.position.y);
+                    gt_msg.pose.pose.position.z = -gt_msg.pose.pose.position.z;
+                    std::swap(gt_msg.twist.twist.linear.x, gt_msg.twist.twist.linear.y);
+                    gt_msg.twist.twist.linear.z = -gt_msg.twist.twist.linear.z;
+                }
                 vio_debug_gt_pub_.publish(gt_msg);
 
-                // Actual estimator output (GT + VIO residual) from controller
-                auto drone_state = get_multirotor_client()->getMultirotorState(vehicle_name);
-                const auto& est_kin = drone_state.kinematics_estimated;
-                nav_msgs::Odometry est_msg;
+                // Estimated: estimator output (GT + VIO residual)
+                nav_msgs::Odometry est_msg = get_odom_msg_from_multirotor_state(drone_state);
                 est_msg.header.stamp = ros::Time::now();
                 est_msg.header.frame_id = "odom";
-                // NED to ENU
-                est_msg.pose.pose.position.x = est_kin.pose.position.y();
-                est_msg.pose.pose.position.y = est_kin.pose.position.x();
-                est_msg.pose.pose.position.z = -est_kin.pose.position.z();
                 vio_debug_est_pub_.publish(est_msg);
             } catch (...) {}
         }
@@ -1928,7 +1936,14 @@ void AirsimROSWrapper::vio_mode_check_timer_cb(const ros::TimerEvent& event)
             }
 
             if (use_vio_for_control_) {
-                ROS_INFO("[AirSim VIO] ✓ VIO MODE ENABLED - Using VIO odometry for control");
+                // CRITICAL: Reset orientation alignment on every VIO enable.
+                // This forces re-capture of vio_orientation_offset_ (for orientation)
+                // and vio_init_gt_orientation_ (for velocity rotation) on the next
+                // VIO odometry message. Without this, stale values from a previous
+                // VIO session would cause wrong velocity rotation if the drone's
+                // heading changed or FAST-LIVO2 restarted (new camera_init frame).
+                vio_orientation_aligned_ = false;
+                ROS_INFO("[AirSim VIO] ✓ VIO MODE ENABLED - Using VIO odometry for control (orientation will re-align)");
                 // std::cout << "[VIO DEBUG ROS] Mode changed to VIO" << std::endl;
             } else {
                 ROS_INFO("[AirSim VIO] ✓ GT MODE ENABLED - Using ground truth for control");

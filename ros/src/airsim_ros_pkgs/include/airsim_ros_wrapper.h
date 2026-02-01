@@ -405,6 +405,7 @@ private:
     // VIO orientation auto-alignment
     bool vio_orientation_aligned_ = false;
     msr::airlib::Quaternionr vio_orientation_offset_;  // VIO to World frame offset
+    msr::airlib::Quaternionr vio_init_gt_orientation_; // GT body orientation at VIO init (for velocity rotation)
     msr::airlib::Vector3r vio_position_offset_;  // VIO to World position offset
 
     static constexpr char CAM_YML_NAME[] = "camera_name";
